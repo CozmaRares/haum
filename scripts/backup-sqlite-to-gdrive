@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+source_dir="${HAUM_BACKUP_SOURCE_DIR:-$root/data}"
+work_dir="${HAUM_BACKUP_WORK_DIR:-/tmp/haum-backups}"
+remote="${HAUM_BACKUP_REMOTE:-gdrive:haum/sqlite}"
+retention_days="${HAUM_BACKUP_RETENTION_DAYS:-3}"
+
+timestamp="$(date -u +'%Y-%m-%dT%H-%M-%SZ')"
+snapshot_dir="$work_dir/$timestamp"
+db_count=0
+
+cleanup() {
+    rm -rf "$snapshot_dir"
+}
+
+trap cleanup EXIT
+
+require_command() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo "Missing required command: $1" >&2
+        exit 1
+    fi
+}
+
+require_command find
+require_command rclone
+require_command sqlite3
+
+if [[ ! -d "$source_dir" ]]; then
+    echo "Backup source directory does not exist: $source_dir" >&2
+    exit 1
+fi
+
+if ! [[ "$retention_days" =~ ^[0-9]+$ ]] || [[ "$retention_days" -lt 1 ]]; then
+    echo "HAUM_BACKUP_RETENTION_DAYS must be a positive integer." >&2
+    exit 1
+fi
+
+mkdir -p "$snapshot_dir"
+
+echo "==> Snapshotting SQLite databases from $source_dir"
+
+while IFS= read -r -d '' db; do
+    relative_path="${db#"$source_dir"/}"
+    destination="$snapshot_dir/$relative_path"
+
+    mkdir -p "$(dirname "$destination")"
+
+    echo "Snapshotting: $relative_path"
+    sqlite3 "$db" ".backup '$destination'"
+
+    result="$(sqlite3 "$destination" "PRAGMA quick_check;")"
+    if [[ "$result" != "ok" ]]; then
+        echo "SQLite verification failed for: $destination" >&2
+        exit 1
+    fi
+
+    db_count=$((db_count + 1))
+done < <(
+    find "$source_dir" -type f \( \
+        -name "*.db" -o \
+        -name "*.sqlite" -o \
+        -name "*.sqlite3" \
+    \) -print0
+)
+
+if [[ "$db_count" -eq 0 ]]; then
+    echo "No SQLite database files found under $source_dir"
+    exit 0
+fi
+
+echo "==> Uploading $db_count database snapshot(s) to $remote/$timestamp"
+rclone copy "$snapshot_dir" "$remote/$timestamp" \
+    --checksum \
+    --create-empty-src-dirs \
+    --log-level INFO
+
+echo "==> Removing remote backup files older than $retention_days day(s)"
+rclone delete "$remote" \
+    --min-age "${retention_days}d" \
+    --log-level INFO
+
+echo "==> Removing empty remote backup directories"
+rclone rmdirs "$remote" \
+    --leave-root \
+    --log-level INFO
+
+echo "==> Backup uploaded to $remote/$timestamp"
