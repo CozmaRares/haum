@@ -38,3 +38,9 @@ echo "==> Service status:"
 docker compose -p bucmarc -f apps/bucmarc/compose.yaml ps
 docker compose -p grafic -f apps/grafic/compose.yaml ps
 docker compose -p proxy -f compose.yaml ps
+
+echo "==> Attaching to logs..."
+docker compose -p bucmarc -f apps/bucmarc/compose.yaml logs -f server &
+docker compose -p grafic -f apps/grafic/compose.yaml logs -f grafic &
+docker compose -p proxy -f compose.proxy.yaml logs -f nginx &
+wait
