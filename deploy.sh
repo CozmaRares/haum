@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+root="/opt/app"
 cd "$root"
 
 if [[ -n "$(git status --porcelain)" ]]; then
