@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+echo "==> Updating app submodules from their configured remotes..."
+git submodule update --remote --recursive apps/bucmarc apps/grafic
+
+echo "==> Staging updated submodule refs..."
+git add apps/bucmarc apps/grafic
+
+if git diff --cached --quiet; then
+    echo "==> No submodule ref changes to commit."
+else
+    timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+    echo "==> Committing updated submodule refs..."
+    git commit -m "update submodules ${timestamp}"
+fi
+
+echo "==> Current submodule refs:"
+git submodule status apps/bucmarc apps/grafic
+
+echo "==> Parent status:"
+git status --short
