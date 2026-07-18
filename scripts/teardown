@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+echo "==> Stopping proxy..."
+docker compose -p proxy -f compose.yaml down
+
+echo "==> Stopping bucmarc..."
+docker compose -p bucmarc -f apps/bucmarc/compose.yaml down
+
+echo "==> Stopping grafic..."
+docker compose -p grafic -f apps/grafic/compose.yaml down
+
+echo "==> Removing reverse-proxy network if unused..."
+docker network rm reverse-proxy 2>/dev/null || {
+    echo "reverse-proxy network was not removed. It may not exist or may still be in use."
+}
+
+echo "==> Done."
