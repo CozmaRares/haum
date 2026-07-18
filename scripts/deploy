@@ -35,12 +35,16 @@ echo "==> Starting proxy..."
 docker compose -p proxy -f compose.yaml up -d
 
 echo "==> Service status:"
-docker compose -p bucmarc -f apps/bucmarc/compose.yaml ps
-docker compose -p grafic -f apps/grafic/compose.yaml ps
+BUCMARC_DATA_DIR="$root/data/bucmarc" \
+    docker compose -p bucmarc -f apps/bucmarc/compose.yaml ps
+GRAFIC_DATA_DIR="$root/data/grafic" \
+    docker compose -p grafic -f apps/grafic/compose.yaml ps
 docker compose -p proxy -f compose.yaml ps
 
 echo "==> Attaching to logs..."
-docker compose -p bucmarc -f apps/bucmarc/compose.yaml logs -f server &
-docker compose -p grafic -f apps/grafic/compose.yaml logs -f grafic &
-docker compose -p proxy -f compose.proxy.yaml logs -f nginx &
+BUCMARC_DATA_DIR="$root/data/bucmarc" \
+    docker compose -p bucmarc -f apps/bucmarc/compose.yaml logs -f server &
+GRAFIC_DATA_DIR="$root/data/grafic" \
+    docker compose -p grafic -f apps/grafic/compose.yaml logs -f grafic &
+docker compose -p proxy -f compose.yaml logs -f nginx &
 wait
