@@ -1,0 +1,6 @@
+[submodule "apps/bucmarc"]
+	path = apps/bucmarc
+	url = git@github.com:CozmaRares/bucmarc.git
+[submodule "apps/grafic"]
+	path = apps/grafic
+	url = git@github.com:CozmaRares/grafic.git
