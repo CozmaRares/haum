@@ -32,7 +32,7 @@ GRAFIC_DATA_DIR="$root/data/grafic" \
     docker compose -p grafic -f apps/grafic/compose.yaml up -d --build
 
 echo "==> Starting proxy..."
-docker compose -p proxy -f compose.proxy.yaml up -d
+docker compose -p proxy -f compose.yaml up -d
 
 echo "==> Service status:"
 docker compose -p bucmarc -f apps/bucmarc/compose.yaml ps
