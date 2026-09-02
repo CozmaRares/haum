@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+usage() {
+    echo "Usage: $0 <app> <40-character-commit-sha>" >&2
+    exit 2
+}
+
+[[ $# -eq 2 ]] || usage
+app="$1"
+requested_ref="$2"
+
+if [[ ! "$app" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; then
+    echo "Invalid app name: $app" >&2
+    exit 2
+fi
+if [[ ! "$requested_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    echo "Commit must be a full 40-character SHA: $requested_ref" >&2
+    exit 2
+fi
+requested_ref="${requested_ref,,}"
+
+submodule="apps/$app"
+configured_path="$(
+    git config --file .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null |
+        awk -v path="$submodule" '$2 == path { print $2 }'
+)"
+if [[ "$configured_path" != "$submodule" ]]; then
+    echo "Unknown app submodule: $app" >&2
+    exit 2
+fi
+
+if [[ -n "$(git status --porcelain)" ]]; then
+    echo "Refusing to update from a dirty parent checkout." >&2
+    exit 1
+fi
+
+echo "==> Synchronizing haum/main..."
+git fetch --no-tags origin main
+if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
+    echo "HEAD must exactly match origin/main before updating a submodule." >&2
+    exit 1
+fi
+
+echo "==> Initializing $submodule..."
+git submodule update --init --recursive -- "$submodule"
+
+echo "==> Fetching $app main..."
+git -C "$submodule" fetch --no-tags origin main
+if ! git -C "$submodule" cat-file -e "${requested_ref}^{commit}" 2>/dev/null; then
+    echo "Commit $requested_ref does not exist in $app." >&2
+    exit 1
+fi
+if ! git -C "$submodule" merge-base --is-ancestor \
+    "$requested_ref" refs/remotes/origin/main; then
+    echo "Commit $requested_ref is not reachable from $app origin/main." >&2
+    exit 1
+fi
+
+current_ref="$(git rev-parse "HEAD:${submodule}")"
+if ! git -C "$submodule" merge-base --is-ancestor \
+    "$current_ref" "$requested_ref"; then
+    echo "Refusing to move $app backwards from $current_ref to $requested_ref." >&2
+    exit 1
+fi
+
+if [[ "$current_ref" == "$requested_ref" ]]; then
+    echo "==> $app is already pinned to $requested_ref."
+else
+    echo "==> Pinning $app to $requested_ref..."
+    git -C "$submodule" checkout --detach "$requested_ref"
+    git add -- "$submodule"
+
+    first_line="$(git -C "$submodule" log -1 --format=%s "$requested_ref")"
+    git commit -m "update $app to ${requested_ref:0:7}" \
+        -m "$app: ${current_ref:0:7} -> ${requested_ref:0:7} $first_line"
+
+    echo "==> Pushing the updated $app ref to haum/main..."
+    git push origin HEAD:main
+fi
+
+echo "==> haum commit: $(git rev-parse HEAD)"
+echo "==> $app commit: $(git rev-parse "HEAD:${submodule}")"

@@ -4,39 +4,111 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-if [[ -n "$(git status --porcelain)" ]]; then
-    echo "Refusing to deploy from a dirty parent checkout."
-    echo "Commit or stash changes in this repo before running deploy."
+usage() {
+    echo "Usage: $0 <app> <app-commit-sha> [haum-commit-sha]" >&2
+    exit 2
+}
+
+[[ $# -eq 2 || $# -eq 3 ]] || usage
+app="$1"
+expected_ref="$2"
+haum_ref="${3:-}"
+
+if [[ ! "$app" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; then
+    echo "Invalid app name: $app" >&2
+    exit 2
+fi
+if [[ ! "$expected_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    echo "Commit must be a full 40-character SHA: $expected_ref" >&2
+    exit 2
+fi
+expected_ref="${expected_ref,,}"
+
+if [[ -n "$haum_ref" ]]; then
+    if [[ ! "$haum_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+        echo "Haum commit must be a full 40-character SHA: $haum_ref" >&2
+        exit 2
+    fi
+    haum_ref="${haum_ref,,}"
+
+    if [[ -n "$(git status --porcelain --ignore-submodules=all)" ]]; then
+        echo "Refusing to replace a dirty production checkout." >&2
+        exit 1
+    fi
+
+    echo "==> Fetching haum/main..."
+    git fetch --no-tags origin main
+    if ! git merge-base --is-ancestor "$haum_ref" origin/main; then
+        echo "Requested haum commit is not reachable from origin/main." >&2
+        exit 1
+    fi
+
+    echo "==> Checking out haum at $haum_ref..."
+    git checkout --detach "$haum_ref"
+
+    # Continue with the deploy script pinned by the requested haum commit.
+    exec "$root/scripts/deploy" "$app" "$expected_ref"
+fi
+
+submodule="apps/$app"
+configured_path="$(
+    git config --file .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null |
+        awk -v path="$submodule" '$2 == path { print $2 }'
+)"
+if [[ "$configured_path" != "$submodule" ]]; then
+    echo "Unknown app submodule: $app" >&2
+    exit 2
+fi
+
+compose_file="$submodule/compose.yaml"
+if [[ ! -f "$compose_file" ]]; then
+    echo "Missing Compose file: $compose_file" >&2
+    exit 1
+fi
+if [[ -n "$(git status --porcelain --ignore-submodules=all)" ]]; then
+    echo "Refusing to deploy from a dirty parent checkout." >&2
     exit 1
 fi
 
-echo "==> Pulling latest production state..."
-git pull --ff-only origin main
+pinned_ref="$(git rev-parse "HEAD:${submodule}")"
+if [[ "$pinned_ref" != "$expected_ref" ]]; then
+    echo "Refusing to deploy $app at an unexpected commit." >&2
+    echo "Expected: $expected_ref" >&2
+    echo "Pinned:   $pinned_ref" >&2
+    exit 1
+fi
 
-echo "==> Updating app submodules..."
-git submodule update --init --recursive
+echo "==> Preparing persistent data directory..."
+data_dir="$root/data/$app"
+mkdir -p "$data_dir"
 
-echo "==> Preparing persistent data directories..."
-mkdir -p data/bucmarc data/grafic
+echo "==> Backing up SQLite databases before deployment..."
+scripts/backup-sqlite-to-gdrive
+
+echo "==> Checking out $app at $expected_ref..."
+git submodule update --init --recursive -- "$submodule"
+checked_out_ref="$(git -C "$submodule" rev-parse HEAD)"
+if [[ "$checked_out_ref" != "$expected_ref" ]]; then
+    echo "Submodule checkout mismatch for $app: $checked_out_ref" >&2
+    exit 1
+fi
 
 echo "==> Ensuring reverse-proxy network exists..."
 docker network inspect reverse-proxy >/dev/null 2>&1 ||
     docker network create reverse-proxy
 
-echo "==> Building and starting bucmarc..."
-BUCMARC_DATA_DIR="$root/data/bucmarc" \
-    docker compose -p bucmarc -f apps/bucmarc/compose.yaml up -d --build --remove-orphans
+data_variable="${app^^}_DATA_DIR"
+data_variable="${data_variable//[^A-Z0-9_]/_}"
 
-echo "==> Building and starting grafic..."
-GRAFIC_DATA_DIR="$root/data/grafic" \
-    docker compose -p grafic -f apps/grafic/compose.yaml up -d --build --remove-orphans
+echo "==> Building and starting $app..."
+env "$data_variable=$data_dir" \
+    docker compose -p "$app" -f "$compose_file" \
+    up -d --build --remove-orphans
 
 echo "==> Starting proxy..."
 docker compose -p proxy -f compose.yaml up -d
 
 echo "==> Service status:"
-BUCMARC_DATA_DIR="$root/data/bucmarc" \
-    docker compose -p bucmarc -f apps/bucmarc/compose.yaml ps
-GRAFIC_DATA_DIR="$root/data/grafic" \
-    docker compose -p grafic -f apps/grafic/compose.yaml ps
+env "$data_variable=$data_dir" \
+    docker compose -p "$app" -f "$compose_file" ps
 docker compose -p proxy -f compose.yaml ps

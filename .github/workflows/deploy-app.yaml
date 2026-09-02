@@ -1,0 +1,127 @@
+name: Deploy app
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: App submodule name under apps/
+        required: true
+        type: string
+      commit:
+        description: Full app commit SHA from main
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: production-deploy
+  queue: max
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.app }} at ${{ inputs.commit }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+
+    steps:
+      - name: Check out haum main
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure deployment commit author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Pin requested app commit
+        env:
+          APP: ${{ inputs.app }}
+          APP_COMMIT: ${{ inputs.commit }}
+        run: scripts/promote "$APP" "$APP_COMMIT"
+
+      - name: Capture exact haum commit
+        id: release
+        env:
+          APP: ${{ inputs.app }}
+        run: |
+          echo "haum_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "app_commit=$(git rev-parse "HEAD:apps/$APP")" >> "$GITHUB_OUTPUT"
+
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          if [[ -z "$DEPLOY_KNOWN_HOSTS" ]]; then
+            echo "::error::DEPLOY_KNOWN_HOSTS repository variable is not configured"
+            exit 1
+          fi
+          if [[ -z "$DEPLOY_SSH_KEY" ]]; then
+            echo "::error::DEPLOY_SSH_KEY repository secret is not configured"
+            exit 1
+          fi
+
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null
+
+      - name: Deploy exact commit to production
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          HAUM_COMMIT: ${{ steps.release.outputs.haum_commit }}
+          APP: ${{ inputs.app }}
+          APP_COMMIT: ${{ steps.release.outputs.app_commit }}
+        run: |
+          for value in DEPLOY_HOST DEPLOY_USER DEPLOY_PATH; do
+            if [[ -z "${!value}" ]]; then
+              echo "::error::$value repository variable is not configured"
+              exit 1
+            fi
+          done
+
+          remote_command="$(printf 'cd %q && exec scripts/deploy %q %q %q' \
+            "$DEPLOY_PATH" "$APP" "$APP_COMMIT" "$HAUM_COMMIT")"
+          ssh -T -i ~/.ssh/deploy_key \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -- "$DEPLOY_USER@$DEPLOY_HOST" \
+            "$remote_command"
+
+      - name: Write deployment summary
+        if: success()
+        env:
+          APP: ${{ inputs.app }}
+          APP_COMMIT: ${{ steps.release.outputs.app_commit }}
+          HAUM_COMMIT: ${{ steps.release.outputs.haum_commit }}
+        run: |
+          {
+            echo "## Production deployment"
+            echo
+            echo "- App: \`$APP\`"
+            echo "- App commit: \`$APP_COMMIT\`"
+            echo "- Haum commit: \`$HAUM_COMMIT\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report deployment failure
+        if: failure()
+        env:
+          APP: ${{ inputs.app }}
+          APP_COMMIT: ${{ inputs.commit }}
+        run: |
+          echo "::error::Production deployment of $APP at $APP_COMMIT failed. Inspect the failed step above."
+          {
+            echo "## Production deployment failed"
+            echo
+            echo "Deployment of \`$APP\` at \`$APP_COMMIT\` failed."
+            echo "Inspect this workflow run's failed step for the exact error."
+          } >> "$GITHUB_STEP_SUMMARY"
