@@ -52,6 +52,29 @@ access to Docker, its configured `rclone` remote, and ownership of the checkout
 and `data/` directory. The workflow never creates or modifies the server
 account.
 
+### First-time server bootstrap
+
+After creating the deployment user and cloning this repository at
+`DEPLOY_PATH`, run the idempotent bootstrap script as that user:
+
+```sh
+scripts/bootstrap-server
+```
+
+The script checks Git, Docker and its Compose plugin, `sqlite3`, `rclone`, and
+Docker daemon access. It initializes the app submodules, creates missing app
+data directories, verifies application `.env` files, checks the configured
+backup remote and nginx TLS files, and creates the external `reverse-proxy`
+Docker network if it does not exist. Existing configuration is left unchanged.
+Validation reports all detectable dependency or configuration issues together
+so they can be fixed in one pass.
+
+It deliberately does not install host packages, create the deployment user,
+write secrets, or request TLS certificates. Before it can pass, create each
+`apps/<app>/.env` from that app's `.env.example` using production values,
+configure the `rclone` remote (by default `gdrive:`), and provision the
+certificates referenced by `nginx/conf.d/*.conf`.
+
 Before enabling the workflow for an existing production checkout, update it
 once manually to a `haum` commit containing this version of `scripts/deploy`.
 Subsequent runs fetch and select their exact `haum` commit themselves.

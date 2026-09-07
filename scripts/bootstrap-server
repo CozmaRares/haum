@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+issues=0
+
+report_issue() {
+    echo "ERROR: $1" >&2
+    issues=$((issues + 1))
+}
+
+echo "==> Checking host dependencies..."
+for dependency in git docker sqlite3 rclone; do
+    if ! command -v "$dependency" >/dev/null 2>&1; then
+        report_issue "Missing required dependency: $dependency"
+    fi
+done
+
+if command -v docker >/dev/null 2>&1; then
+    docker compose version >/dev/null 2>&1 ||
+        report_issue "Missing required dependency: Docker Compose plugin"
+    docker info >/dev/null 2>&1 ||
+        report_issue "Current user cannot access the Docker daemon"
+fi
+
+if ! command -v git >/dev/null 2>&1; then
+    echo "Bootstrap found $issues issue(s). Install Git, then run it again for the remaining checks." >&2
+    exit 1
+fi
+
+mapfile -t apps < <(
+    git config --file .gitmodules --get-regexp '^submodule\..*\.path$' |
+        awk '$2 ~ /^apps\// { sub(/^apps\//, "", $2); print $2 }'
+)
+if ((${#apps[@]} == 0)); then
+    echo "No app submodules are configured in .gitmodules" >&2
+    exit 1
+fi
+
+echo "==> Initializing app submodules..."
+for app in "${apps[@]}"; do
+    if ! git -C "apps/$app" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        git submodule update --init --recursive -- "apps/$app"
+    fi
+done
+
+echo "==> Preparing persistent data directories..."
+for app in "${apps[@]}"; do
+    mkdir -p "data/$app"
+done
+
+echo "==> Checking application configuration..."
+for app in "${apps[@]}"; do
+    app_dir="apps/$app"
+    if [[ ! -f "$app_dir/.env" ]]; then
+        report_issue "Missing $app_dir/.env; create it from $app_dir/.env.example with production values"
+    fi
+done
+
+echo "==> Checking backup configuration..."
+backup_remote="${HAUM_BACKUP_REMOTE:-gdrive:haum/sqlite}"
+remote_name="${backup_remote%%:*}:"
+if command -v rclone >/dev/null 2>&1 &&
+    ! rclone listremotes 2>/dev/null | grep -Fxq -- "$remote_name"; then
+    report_issue "rclone remote $remote_name is not configured for the deployment user"
+fi
+
+if ((issues > 0)); then
+    echo "Bootstrap found $issues issue(s). Fix them and run it again." >&2
+    exit 1
+fi
+
+echo "==> Ensuring reverse-proxy network exists..."
+docker network inspect reverse-proxy >/dev/null 2>&1 ||
+    docker network create reverse-proxy >/dev/null
+
+echo "==> Bootstrap complete. The host is ready for deployment."
