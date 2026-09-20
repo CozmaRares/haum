@@ -101,9 +101,17 @@ data_variable="${app^^}_DATA_DIR"
 data_variable="${data_variable//[^A-Z0-9_]/_}"
 
 echo "==> Building and starting $app..."
+compose_exit_code=0
 env "$data_variable=$data_dir" \
     docker compose -p "$app" -f "$compose_file" \
-    up -d --build --remove-orphans
+    up -d --build --remove-orphans || compose_exit_code=$?
+if ((compose_exit_code != 0)); then
+    echo "==> $app startup failed; container logs:" >&2
+    env "$data_variable=$data_dir" \
+        docker compose -p "$app" -f "$compose_file" \
+        logs --no-color >&2 || true
+    exit "$compose_exit_code"
+fi
 
 echo "==> Starting proxy..."
 docker compose -p proxy -f compose.yaml up -d
