@@ -137,3 +137,20 @@ Example cron entry:
 ```cron
 15 3 * * * /opt/app/scripts/backup-sqlite-to-gdrive >> /var/log/haum-backup.log 2>&1
 ```
+
+## TLS certificate renewals
+
+`scripts/renew-certificates` runs `certbot renew --quiet` using the existing
+renewal configuration for every certificate managed by host Certbot. After a
+successful renewal, its deploy hook reloads nginx in the `proxy` Compose project.
+
+Replace the existing renewal cron entry with this entry in root's crontab
+(adjust `/opt/app` to the production checkout path):
+
+```cron
+0 3 * * * /opt/app/scripts/renew-certificates >> /var/log/haum-certificates.log 2>&1
+```
+
+The script requires host Certbot and Docker Compose. Certificates must already
+be provisioned; their existing validation method and hooks are reused.
+Deployments also validate and reload nginx after starting the proxy.

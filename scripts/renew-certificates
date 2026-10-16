@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+# Use each certificate's existing Certbot renewal configuration.
+# The explicit project name matches scripts/deploy.
+exec certbot renew --quiet --deploy-hook \
+    'docker compose -p proxy -f compose.yaml exec -T nginx nginx -s reload'

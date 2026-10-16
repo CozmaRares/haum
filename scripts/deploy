@@ -116,6 +116,10 @@ fi
 echo "==> Starting proxy..."
 docker compose -p proxy -f compose.yaml up -d
 
+echo "==> Validating and reloading proxy configuration and certificates..."
+docker compose -p proxy -f compose.yaml exec -T nginx nginx -t
+docker compose -p proxy -f compose.yaml exec -T nginx nginx -s reload
+
 echo "==> Service status:"
 env "$data_variable=$data_dir" \
     docker compose -p "$app" -f "$compose_file" ps
