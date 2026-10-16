@@ -140,9 +140,16 @@ Example cron entry:
 
 ## TLS certificate renewals
 
-`scripts/renew-certificates` runs `certbot renew --quiet` using the existing
-renewal configuration for every certificate managed by host Certbot. After a
-successful renewal, its deploy hook reloads nginx in the `proxy` Compose project.
+`scripts/renew-certificates` renews host Certbot certificates using webroot
+validation. nginx serves HTTP challenges from the shared `data/acme/` directory
+for bucmarc and grafic while both apps remain online. Other HTTP requests still
+redirect to HTTPS. The script overrides the previous standalone validation
+settings, then validates and reloads nginx to load renewed certificates, including
+successful renewals when another certificate fails.
+
+The first run applies the new Compose mount and may briefly recreate nginx.
+Later runs keep nginx running. Deploy these nginx configs and `compose.yaml`
+together with the script before running it.
 
 Replace the existing renewal cron entry with this entry in root's crontab
 (adjust `/opt/app` to the production checkout path):
@@ -152,5 +159,8 @@ Replace the existing renewal cron entry with this entry in root's crontab
 ```
 
 The script requires host Certbot and Docker Compose. Certificates must already
-be provisioned; their existing validation method and hooks are reused.
+be provisioned. Public port 80 must reach nginx for every domain on the
+certificates managed by Certbot. Add the same HTTP challenge location to future
+app configs. Existing Certbot hooks still run; remove obsolete hooks that stop
+nginx or reload a host nginx service.
 Deployments also validate and reload nginx after starting the proxy.

@@ -4,7 +4,21 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-# Use each certificate's existing Certbot renewal configuration.
-# The explicit project name matches scripts/deploy.
-exec certbot renew --quiet --deploy-hook \
-    'docker compose -p proxy -f compose.yaml exec -T nginx nginx -s reload'
+# Apply the shared challenge directory and HTTP route before validation.
+mkdir -p "$root/data/acme/.well-known/acme-challenge"
+chmod 755 "$root/data/acme" "$root/data/acme/.well-known" \
+    "$root/data/acme/.well-known/acme-challenge"
+proxy=(docker compose -p proxy -f "$root/compose.yaml")
+"${proxy[@]}" up -d nginx
+"${proxy[@]}" exec -T nginx nginx -t
+"${proxy[@]}" exec -T nginx nginx -s reload
+
+# Override existing standalone renewal settings so nginx can keep port 80.
+status=0
+certbot renew --quiet --authenticator webroot \
+    --webroot-path "$root/data/acme" || status=$?
+
+# Load successful renewals even when another certificate failed to renew.
+"${proxy[@]}" exec -T nginx nginx -t
+"${proxy[@]}" exec -T nginx nginx -s reload
+exit "$status"
